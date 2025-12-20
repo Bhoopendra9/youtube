@@ -23,9 +23,10 @@ const morganStream = {
 // HTTP request logging
 app.use(morgan("combined", { stream: morganStream }));
 
-// Sample route
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
+// Importing routes
+const userRoutes = require("./routes/user.routes");
+
+// routes declaration
+app.use("/api/v1/users", userRoutes);
 
 module.exports = app;

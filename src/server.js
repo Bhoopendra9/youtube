@@ -19,7 +19,7 @@ connectDB();
 // 3️⃣ Start Server
 // ----------------------------
 const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`Server running on port ${PORT}`);
 });
 
 //Handling unhandled promise rejections globally
