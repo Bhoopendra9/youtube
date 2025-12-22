@@ -4,7 +4,27 @@ const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 const ApiResponse = require("../utils/apiResponse");
 const uploadToCloudinary = require("../utils/cloudinary");
-const { validateUserRegistration } = require("../utils/validation");
+const {
+  validateUserRegistration,
+  validateUserLogin,
+} = require("../utils/validation");
+
+// generate tokens
+const generateAccessAndRefreshTokens = async (userId) => {
+  try {
+    const user = await User.findById(userId);
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+
+    user.refreshTokens = refreshToken;
+    await user.save({ validateBeforeSave: false });
+
+    return { accessToken, refreshToken };
+  } catch (error) {
+    logger.error("Error generating tokens: " + error.message);
+    throw new ApiError(500, "Error generating tokens");
+  }
+};
 
 //Register new user
 const registerUser = asyncHandler(async (req, res) => {
@@ -37,13 +57,18 @@ const registerUser = asyncHandler(async (req, res) => {
   // check for avatar and coverImage files
   const avatarlocalPath = req.files.avatar[0]?.path;
   const coverImagelocalPath = req.files.coverImage[0]?.path;
-  if (!avatarlocalPath || !coverImagelocalPath) {
+  //if cover image is not provided, use a default image
+  // let coverImagelocalPath ="";
+  // if (req.files && Array.isArray(req.files.coverImage) && req.files.coverImage.length > 0) {
+  //   coverImagelocalPath = req.files.coverImage[0]?.path;
+  // }
+
+  if (!avatarlocalPath) {
     logger.error("Avatar and Cover Image are required");
     throw new ApiError(400, "Avatar and Cover Image are required");
   }
 
   // upload images to cloudinary
-  console.log(uploadToCloudinary);
   const avatarUploadResult = await uploadToCloudinary(avatarlocalPath);
   const coverImageUploadResult = await uploadToCloudinary(coverImagelocalPath);
   if (!avatarUploadResult || !coverImageUploadResult) {
@@ -51,7 +76,6 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(500, "Failed to upload images");
   }
 
-  
   // create new user
   const newUser = await User.create({
     username,
@@ -78,6 +102,68 @@ const registerUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, "User registered successfully", createdUser));
 });
 
+const logInUser = asyncHandler(async (req, res) => {
+  //get data from body
+  // validation for username and password
+  // check user
+  // check password
+  // generate access and refresh token
+  // send response with token
+
+  logger.info("Logging in user");
+
+  const { username, email, password } = req.body;
+
+  // const { error } = validateUserLogin(req.body);
+  // if (error) {
+  //   logger.error("Validation error: " + error.details[0].message);
+  //   throw new ApiError(400, error.details[0].message);
+  // }
+
+  if (!username && !email) {
+    logger.error("Username or email is required for login");
+    throw new ApiError(400, "Username or email is required for login");
+  }
+
+  const user = await User.findOne({ $or: [{ email }, { username }] });
+  if (!user) {
+    logger.error("User not found with given email or username");
+    throw new ApiError(404, "User not found with given email or username");
+  }
+
+  const isPasswordValid = await user.isPasswordMatch(password);
+  if (!isPasswordValid) {
+    logger.error("Invalid password");
+    throw new ApiError(401, "Invalid password");
+  }
+
+  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+    user._id
+  );
+
+  const userData = await User.findById(user._id).select(
+    "-password -refreshTokens"
+  );
+
+  const options = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, options)
+    .cookie("refreshToken", refreshToken, options)
+    .json(
+      new ApiResponse(200, "User logged in successfully", {
+        user: userData,
+        accessToken,
+        refreshToken,
+      })
+    );
+});
+
 module.exports = {
   registerUser,
+  logInUser,
 };
