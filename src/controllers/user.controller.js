@@ -13,11 +13,10 @@ const {
 const generateAccessAndRefreshTokens = async (userId) => {
   try {
     const user = await User.findById(userId);
+
+    console.log(user);
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
-
-    user.refreshTokens = refreshToken;
-    await user.save({ validateBeforeSave: false });
 
     return { accessToken, refreshToken };
   } catch (error) {
@@ -131,7 +130,7 @@ const logInUser = asyncHandler(async (req, res) => {
     throw new ApiError(404, "User not found with given email or username");
   }
 
-  const isPasswordValid = await user.isPasswordMatch(password);
+  const isPasswordValid = await user.isPasswordCorrect(password);
   if (!isPasswordValid) {
     logger.error("Invalid password");
     throw new ApiError(401, "Invalid password");
@@ -141,8 +140,12 @@ const logInUser = asyncHandler(async (req, res) => {
     user._id
   );
 
+  // save refresh token in db
+  user.refreshToken = refreshToken;
+  await user.save({ validateBeforeSave: false });
+
   const userData = await User.findById(user._id).select(
-    "-password -refreshTokens"
+    "-password -refreshToken"
   );
 
   const options = {
@@ -163,7 +166,32 @@ const logInUser = asyncHandler(async (req, res) => {
     );
 });
 
+const logOutUser = asyncHandler(async (req, res) => {
+  // clear cookies
+  logger.info("Logging out user");
+  await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        refreshToken: undefined,
+      },
+    },
+    { new: true, validateBeforeSave: false }
+  );
+
+  const options = {
+    httpOnly: true,
+    secure: true,
+  };
+  res
+    .status(200)
+    .clearCookie("accessToken", options)
+    .clearCookie("refreshToken", options)
+    .json(new ApiResponse(200, "User logged out successfully", null));
+});
+
 module.exports = {
   registerUser,
   logInUser,
+  logOutUser,
 };
