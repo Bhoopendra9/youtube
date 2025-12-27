@@ -190,8 +190,70 @@ const logOutUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, "User logged out successfully", null));
 });
 
+//get access token by refresh token
+const getAccessToken = asyncHandler(async (req, res) => {
+  //get refresh token from cookies
+  const inComingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+  if (!inComingRefreshToken) {
+    logger.error("Refresh token is required");
+    throw new ApiErro(401, "Unauthorized! Refresh token is required");
+  }
+
+  try {
+    //verify refresh token
+    const decoded = jwt.verify(
+      inComingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET
+    );
+
+    //check if refresh token is in db
+    const user = await User.findById(decoded._id);
+    if (!user) {
+      logger.error("User not found");
+      throw new ApiError(401, "Invalid refresh token");
+    }
+
+    //check if refresh token matches
+    if (user.refreshToken !== inComingRefreshToken) {
+      logger.error("Invalid refresh token");
+      throw new ApiError(401, "Refresh token is expired or invalid");
+    }
+
+    //generate new access token
+    const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+      user._id
+    );
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave: false });
+
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", refreshToken, options)
+      .json(
+        new ApiResponse(200, "New access token generated successfully", {
+          accessToken,
+          refreshToken,
+        })
+      );
+  } catch (error) {
+    logger.error("Error in generating access token: " + error.message);
+    throw new ApiError(500, "Error generating access token");
+  }
+});
+
+//reset my password
+const resetPassword = asyncHandler(async (req, res) => {});
+
 module.exports = {
   registerUser,
   logInUser,
   logOutUser,
+  getAccessToken,
 };
