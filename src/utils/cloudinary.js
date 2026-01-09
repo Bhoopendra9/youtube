@@ -19,7 +19,6 @@ const uploadToCloudinary = async (filePath) => {
       resource_type: "auto", // Automatically detect the file type
     });
     //file uploaded successfully
-    console.log("File uploaded to Cloudinary:", result);
     // Remove file from local uploads folder
     fs.unlinkSync(filePath);
     return result;
@@ -30,4 +29,4 @@ const uploadToCloudinary = async (filePath) => {
     throw new Error("Cloudinary upload failed");
   }
 };
-module.exports = uploadToCloudinary;
+module.exports = { uploadToCloudinary };

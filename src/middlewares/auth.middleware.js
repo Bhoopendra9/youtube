@@ -24,7 +24,7 @@ const authMiddleware = asyncHandler(async (req, _, next) => {
 
     // get user from token
     const user = await User.findById(decoded._id).select(
-      "-refreshToken -password"
+      "-refreshToken -password -publicIdAvatar -publicIdCoverImage"
     );
     if (!user) {
       logger.error("User not found for given token");

@@ -1,13 +1,19 @@
+const mongoose = require("mongoose");
+const crypto = require("crypto");
 const asyncHandler = require("../utils/asyncHandler");
 const jwt = require("jsonwebtoken");
 const User = require("../models/user.models");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
-const ApiResponse = require("../utils/apiResponse");
-const uploadToCloudinary = require("../utils/cloudinary");
+const ApiResponse = require("../utils/ApiResponse");
+const { uploadToCloudinary } = require("../utils/cloudinary");
+const sendEmail = require("../utils/email");
 const {
   validateUserRegistration,
   validateUserLogin,
+  changeCurrentPassword,
+  forgetPasswordSchema,
+  resetPasswordSchema,
 } = require("../utils/validation");
 
 // generate tokens
@@ -15,7 +21,6 @@ const generateAccessAndRefreshTokens = async (userId) => {
   try {
     const user = await User.findById(userId);
 
-    console.log(user);
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
 
@@ -25,6 +30,11 @@ const generateAccessAndRefreshTokens = async (userId) => {
     throw new ApiError(500, "Error generating tokens");
   }
 };
+
+//get App Url
+function getAppUrl() {
+  return process.env.APP_URL || `http://localhost:${process.env.PORT}`;
+}
 
 //Register new user
 const registerUser = asyncHandler(async (req, res) => {
@@ -38,14 +48,15 @@ const registerUser = asyncHandler(async (req, res) => {
   // send welcome email
   // send response to frontend
   logger.info("Registering new user");
-  const { username, email, fullName, password } = req.body;
 
   // validate user input
-  const { error } = validateUserRegistration(req.body);
+  const { error, value } = validateUserRegistration(req.body);
   if (error) {
-    logger.error("Validation error: " + error.details[0].message);
+    logger.error(" Joi Validation error: " + error.details[0].message);
     throw new ApiError(400, error.details[0].message);
   }
+
+  const { username, email, fullName, password } = value;
 
   // check if user already exists
   const existingUser = await User.findOne({ $or: [{ email }, { username }] });
@@ -82,9 +93,32 @@ const registerUser = asyncHandler(async (req, res) => {
     email,
     fullName,
     avatar: avatarUploadResult.url,
+    publicIdAvatar: avatarUploadResult.public_id,
     coverImage: coverImageUploadResult.url,
+    publicIdCoverImage: coverImageUploadResult.public_id,
     password,
   });
+
+  //Send email verification part
+  const verifyToken = jwt.sign(
+    {
+      sub: newUser._id,
+    },
+    process.env.JWT_VERIFY_EMAIL_TOKEN,
+    {
+      expiresIn: "1d",
+    }
+  );
+
+  const verifyUrl = `${getAppUrl()}/api/v1/users/verify-email?token=${verifyToken}`;
+
+  await sendEmail(
+    newUser.email,
+    "Verify your email",
+    ` <p>Click to verify your email:</p>
+      <a href="${verifyUrl}">${verifyUrl}</a>
+    `
+  );
 
   // remove sensitive data before sending response
   const createdUser = await User.findById(newUser._id).select(
@@ -102,6 +136,41 @@ const registerUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, "User registered successfully", createdUser));
 });
 
+const verifyEmailHandler = asyncHandler(async (req, res) => {
+  const { token } = req.query;
+  if (!token) {
+    logger.error("Verification token is required");
+    throw new ApiError(400, "Verification token is required");
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_VERIFY_EMAIL_TOKEN);
+    const userId = decoded.sub;
+
+    //find user and update isEmailVerified to true
+    const user = await User.findById(userId);
+    if (!user) {
+      logger.warn("User not found");
+      throw new ApiError(400, "User not found");
+    }
+
+    if (user.isEmailVerified) {
+      logger.warn("Email is already verified");
+      return res.json(new ApiResponse(400, "Email is already verified"));
+    }
+
+    user.isEmailVerified = true;
+    await user.save();
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, "Email is now verified! you can login "));
+  } catch (error) {
+    console.error("while email verification : ", error);
+    throw new ApiError(500, "while email verification : ", error);
+  }
+});
+
 const logInUser = asyncHandler(async (req, res) => {
   //get data from body
   // validation for username and password
@@ -112,14 +181,13 @@ const logInUser = asyncHandler(async (req, res) => {
 
   logger.info("Logging in user");
 
-  const { username, email, password } = req.body;
+  const { error, value } = validateUserLogin(req.body);
+  if (error) {
+    logger.error("Validation error: " + error.details[0].message);
+    throw new ApiError(400, error.details[0].message);
+  }
 
-  // const { error } = validateUserLogin(req.body);
-  // if (error) {
-  //   logger.error("Validation error: " + error.details[0].message);
-  //   throw new ApiError(400, error.details[0].message);
-  // }
-
+  const { username, email, password } = value;
   if (!username && !email) {
     logger.error("Username or email is required for login");
     throw new ApiError(400, "Username or email is required for login");
@@ -137,6 +205,15 @@ const logInUser = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid password");
   }
 
+  //check user's email is verify or not
+  if (!user.isEmailVerified) {
+    logger.warn("User's email is not verify please verify your email");
+    throw new ApiError(
+      403,
+      "User's email is not verify please verify your email"
+    );
+  }
+
   const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
     user._id
   );
@@ -146,7 +223,7 @@ const logInUser = asyncHandler(async (req, res) => {
   await user.save({ validateBeforeSave: false });
 
   const userData = await User.findById(user._id).select(
-    "-password -refreshToken"
+    "-password -refreshToken -publicIdAvatar -publicIdCoverImage"
   );
 
   const options = {
@@ -173,8 +250,9 @@ const logOutUser = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(
     req.user._id,
     {
-      $set: {
-        refreshToken: null,
+      $unset: {
+        //this will remove the field from db
+        refreshToken: 1,
       },
     },
     { new: true, validateBeforeSave: false }
@@ -195,10 +273,10 @@ const logOutUser = asyncHandler(async (req, res) => {
 const getAccessToken = asyncHandler(async (req, res) => {
   //get refresh token from cookies
   const inComingRefreshToken =
-    req.cookies.refreshToken || req.body.refreshToken;
+    req.cookies?.refreshToken || req.body?.refreshToken;
   if (!inComingRefreshToken) {
     logger.error("Refresh token is required");
-    throw new ApiErro(401, "Unauthorized! Refresh token is required");
+    throw new ApiError(401, "Unauthorized! Refresh token is required");
   }
 
   try {
@@ -251,7 +329,19 @@ const getAccessToken = asyncHandler(async (req, res) => {
 
 //change current password of logged in user
 const changePassword = asyncHandler(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  const { error, value } = changeCurrentPassword(req.body);
+  if (error) {
+    logger.error(
+      "Please provide valid password at change password : ",
+      error.details[0].message
+    );
+    throw new ApiError(
+      500,
+      "Please provide valid password at change password :",
+      error.details[0].message
+    );
+  }
+  const { currentPassword, newPassword } = value;
   const user = await User.findById(req.user._id);
   if (!user) {
     logger.error("User not found");
@@ -260,8 +350,23 @@ const changePassword = asyncHandler(async (req, res) => {
 
   const isPasswordValid = await user.isPasswordCorrect(currentPassword);
   if (!isPasswordValid) {
-    logger.error("Current password is incorrect");
-    throw new ApiError(401, "Current password is incorrect");
+    logger.error(
+      "Current password is incorrect. Please provide valid current password"
+    );
+    throw new ApiError(
+      400,
+      "Current password is incorrect. Please provide valid current password"
+    );
+  }
+
+  if (currentPassword === newPassword) {
+    logger.error(
+      "your new password is same as current password. New password must not be same as current password"
+    );
+    throw new ApiError(
+      400,
+      "your new password is same as current password. New password must not be same as current password"
+    );
   }
 
   user.password = newPassword;
@@ -269,11 +374,99 @@ const changePassword = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, "Password changed successfully", null));
+    .json(new ApiResponse(200, "Password has been changed successfully", null));
 });
 
-//reset my password
-const resetPassword = asyncHandler(async (req, res) => {});
+//forget password by email
+const forgetPassword = asyncHandler(async (req, res) => {
+  // 1. Check if email exists
+  // 2. Generate reset token (JWT or random string)
+  // 3. Save token in DB or cache with expiry
+  // 4. Send reset link to email
+  logger.info("forget Password route hit......");
+  const { error, value } = forgetPasswordSchema(req.body);
+  if (error) {
+    logger.error("Joi validation error :", error.message);
+    throw new ApiError(400, "Joi validation error :", error.details[0].message);
+  }
+
+  try {
+    const { email } = value;
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      logger.error("User not found by given email");
+      throw new ApiError(400, "User not found by given email");
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    user.resetPasswordToken = tokenHash;
+    user.resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000);
+    //vaild for 10 minute
+    await user.save();
+
+    const resetUrl = `${getAppUrl()}/api/v1/users/reset-password?token=${tokenHash}`;
+
+    //send resetUrl by email
+    await sendEmail(
+      user.email,
+      "Reset your password",
+      `<p>You requested a password reset.</p>
+      <p>Click below to set a new password:</p>
+      <a href="${resetUrl}">${resetUrl}</a> `
+    );
+
+    logger.info("Reset password link has been sent.....");
+    return res
+      .status(200)
+      .json(new ApiResponse(200, "Reset link sent to your email", null));
+  } catch (error) {}
+});
+
+//Reset password.
+const resetPassword = asyncHandler(async (req, res) => {
+  // 1. Validate token
+  // 2. Hash new password
+  // 3. Update user
+  // 4. Remove or invalidate token
+  const { error, value } = resetPasswordSchema(req.body);
+  if (error) {
+    logger.warn("token is required");
+    throw new ApiError(400, "token is required");
+  }
+
+  const { token, newPassword, confirmPassword } = value;
+  if (newPassword !== confirmPassword) {
+    logger.warn("New password is not same as confirm password");
+    throw new ApiError(400, "New password is not same as confirm password");
+  }
+
+  const user = await User.findOne({
+    resetPasswordToken: token,
+    resetPasswordExpires: { $gt: new Date() },
+  });
+  if (!user) {
+    logger.warn("User not found");
+    throw new ApiError(400, "User not found");
+  }
+
+  user.password = newPassword;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpires = undefined;
+
+  await user.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, "Password has been reset successfully "));
+});
 
 //get current user profile
 const getCurrentUserProfile = asyncHandler(async (req, res) => {
@@ -424,6 +617,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
     },
     {
       $project: {
+        _id: 0,
         username: 1,
         fullName: 1,
         avatar: 1,
@@ -466,7 +660,7 @@ const getUserWatchHistory = asyncHandler(async (req, res) => {
         foreignField: "_id",
         as: "watchHistoryDetails",
         pipeline: [
-          //in videos collection now i am matching with user id
+          //in videos collection now poluting user details who uploaded the video
           {
             $lookup: {
               from: "users",
@@ -499,10 +693,13 @@ const getUserWatchHistory = asyncHandler(async (req, res) => {
 
 module.exports = {
   registerUser,
+  verifyEmailHandler,
   logInUser,
   logOutUser,
   getAccessToken,
   changePassword,
+  forgetPassword,
+  resetPassword,
   getCurrentUserProfile,
   updateAccountDetails,
   updateUserProfileImage,

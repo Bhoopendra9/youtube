@@ -1,10 +1,13 @@
 const express = require("express");
 const {
   registerUser,
+  verifyEmailHandler,
   logInUser,
   logOutUser,
   getAccessToken,
   changePassword,
+  forgetPassword,
+  resetPassword,
   getCurrentUserProfile,
   updateAccountDetails,
   updateUserProfileImage,
@@ -14,6 +17,10 @@ const {
 } = require("../controllers/user.controller");
 const upload = require("../middlewares/multer.middleware");
 const authMiddleware = require("../middlewares/auth.middleware");
+const {
+  googleAuthStartHandler,
+  googleAuthCallbackHandler,
+} = require("../controllers/google.controller");
 
 const router = express.Router();
 
@@ -25,10 +32,14 @@ router.route("/register").post(
   ]),
   registerUser
 );
+//user's email verification route
+router.route("/verify-email").get(verifyEmailHandler);
 router.route("/login").post(logInUser);
 router.route("/logout").get(authMiddleware, logOutUser);
 router.route("/refresh-token").get(getAccessToken);
 router.route("/change-password").post(authMiddleware, changePassword);
+router.route("/forget-password").post(forgetPassword);
+router.route("/reset-password").post(resetPassword);
 router.route("/profile").get(authMiddleware, getCurrentUserProfile);
 router.route("/update-account").patch(authMiddleware, updateAccountDetails);
 router
@@ -40,5 +51,9 @@ router
 
 router.route("/channel/:username").get(authMiddleware, getUserChannelProfile);
 router.route("/watch-history").get(authMiddleware, getUserWatchHistory);
+
+//google auth
+router.route("/google-auth").get(googleAuthStartHandler);
+router.route("/google/callback").get(googleAuthCallbackHandler);
 
 module.exports = router;

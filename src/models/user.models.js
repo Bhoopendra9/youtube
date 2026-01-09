@@ -16,6 +16,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       unique: true,
       lowercase: true,
+      trim: true,
     },
     fullName: {
       type: String,
@@ -24,10 +25,15 @@ const userSchema = new mongoose.Schema(
     },
     avatar: {
       type: String, //cloudinary URL
-      required: true,
+    },
+    publicIdAvatar: {
+      type: String, //cloudinary public id
     },
     coverImage: {
       type: String, //cloudinary URL
+    },
+    publicIdCoverImage: {
+      type: String, //cloudinary public id
     },
     watchHistory: [
       {
@@ -42,6 +48,30 @@ const userSchema = new mongoose.Schema(
     refreshToken: {
       type: String,
       default: null,
+    },
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user",
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    resetPasswordToken: {
+      type: String,
+      default: undefined,
+    },
+    resetPasswordExpires: {
+      type: Date,
+      default: undefined,
+    },
+    twoFactoreEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    twoFactoreSecret: {
+      type: String, //encrypted
     },
   },
   { timestamps: true }
