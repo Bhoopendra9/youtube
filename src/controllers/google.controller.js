@@ -55,7 +55,6 @@ const googleAuthCallbackHandler = asyncHandler(async (req, res) => {
 
     const client = getGoogleClient();
     const { tokens } = await client.getToken(code);
-    console.log("code:", code, tokens);
     if (!tokens.id_token) {
       return res
         .status(400)

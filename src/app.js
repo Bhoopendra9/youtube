@@ -32,4 +32,15 @@ const videoRoutes = require("./routes/video.routes");
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/videos", videoRoutes);
 
+//Api Doc
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./utils/swagger");
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    explorer: true,
+  })
+);
+
 module.exports = app;

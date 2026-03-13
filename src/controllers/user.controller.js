@@ -342,6 +342,7 @@ const changePassword = asyncHandler(async (req, res) => {
     );
   }
   const { currentPassword, newPassword } = value;
+
   const user = await User.findById(req.user._id);
   if (!user) {
     logger.error("User not found");
@@ -427,7 +428,10 @@ const forgetPassword = asyncHandler(async (req, res) => {
     return res
       .status(200)
       .json(new ApiResponse(200, "Reset link sent to your email", null));
-  } catch (error) {}
+  } catch (error) {
+    logger.error("Forget password link has not been sent:", error);
+    throw new ApiError(500, "Forget password link has not been sent");
+  }
 });
 
 //Reset password.
@@ -438,8 +442,8 @@ const resetPassword = asyncHandler(async (req, res) => {
   // 4. Remove or invalidate token
   const { error, value } = resetPasswordSchema(req.body);
   if (error) {
-    logger.warn("token is required");
-    throw new ApiError(400, "token is required");
+    logger.warn("token and Password are required");
+    throw new ApiError(400, "token and Password are required");
   }
 
   const { token, newPassword, confirmPassword } = value;
@@ -455,6 +459,12 @@ const resetPassword = asyncHandler(async (req, res) => {
   if (!user) {
     logger.warn("User not found");
     throw new ApiError(400, "User not found");
+  }
+
+  const isPasswordMatch = await user.isPasswordCorrect(newPassword);
+  if (isPasswordMatch) {
+    logger.warn("New password must not be same as old password");
+    throw new ApiError(400, "New password must not be same as old password");
   }
 
   user.password = newPassword;
